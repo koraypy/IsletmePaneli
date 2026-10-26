@@ -1,0 +1,3 @@
+# Çalıştırmak için hiçbir ek paket gerekmez (yalnızca Python standart kütüphanesi).
+# .exe üretmek için:
+pyinstaller>=6.0
