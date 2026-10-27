@@ -18,6 +18,8 @@
 | 🎨 **Görünüm** | Açık/koyu tema, vurgu rengi, yazı boyutu. Ayarlar hatırlanır. |
 | 💾 **Yedek** | Her gün otomatik yedek (son 14 gün), elle yedek, JSON/CSV(Excel) dışa aktarma, JSON içe aktarma, kayıtsız şablon dışa aktarma. |
 | 📋 **Kopyala** | Her alanın yanında tek tıkla panoya kopyalama. |
+| 💬 **WhatsApp mesajı** | Kayıtlı numaradan tek tıkla WhatsApp'ı hazır mesajla açar; tek kişiye ya da listelenen herkese sırayla. Şablonlar ve `{ad}` gibi kişiye özel alanlar. |
+| 🔄 **Güncelleme** | GitHub'daki yeni sürümü denetler; `.exe` sürümünde tek tıkla indirip kurar (SHA256 doğrulamalı). Verileriniz korunur. |
 | 📥 **Excel/CSV karşılaştırma + izleme** | Elinizdeki listeyi panelle karşılaştırır: kim **yeni**, kimin bilgisi **değişmiş**, kim **listede yok**. Dosyayı izleyip değişince haber verir. |
 
 Uygulama ilk açıldığında **Personel / Müşteri / Tedarikçi** kategorileri ve örnek bir personel kaydı (*Ahmet Yalın*) ile gelir. Örneği silmek için kaydı seçip **Sil**'e basmanız yeterli.
@@ -58,6 +60,32 @@ Telefon eşleştirmesi son 10 haneye bakar; `0555 444 55 44`, `+90 555 444 55 44
 
 **İzleme (bot):** “Bu dosyayı izle” kutusunu işaretleyip Karşılaştır'a basarsanız panel, belirlediğiniz aralıkta (varsayılan 30 dk) dosyanın değişip değişmediğine bakar. Değişmişse ve yeni/değişen kişi varsa “3 yeni kişi var” diye sorar, onaylarsanız karşılaştırma ekranı hazır gelir. Panel kapalıyken kontrol yapılmaz; açıldığında ilk iş kontrol eder. Dosya Excel'de açıksa okunamayabilir, sonraki turda yeniden denenir.
 
+## WhatsApp'tan mesaj gönderme
+
+- **Tek kişi:** kaydı seçin ▸ **💬 WhatsApp**. **Toplu:** arama yapın ya da bir kategori seçin ▸ üstteki **💬 Toplu mesaj** (listelenen herkes).
+- Mesajı yazın ya da şablon seçin. `{ad}` (ilk ad), `{tam_ad}` ve kategorinizdeki alan adları (`{görev}` gibi) kişiye göre otomatik dolar. **Gizli alanlar (TC, IBAN) mesaja hiçbir zaman konmaz.** Beğendiğiniz mesajı **Kaydet** ile şablon yapın.
+- **Seçiliyi WhatsApp'ta aç** ya da toplu listede **Sıradakini aç →**: WhatsApp mesaj hazır şekilde açılır, **Gönder'e siz basarsınız**. Her kişi “açıldı ✓” olarak işaretlenir.
+- Numaralar otomatik düzeltilir (`0555…`, `+90 555…`, `555…` → uluslararası biçim). Sabit hatlar atlanır. Bir kayıtta birden fazla numara varsa seçebilirsiniz.
+- Ayarlar'dan açma yöntemini seçin: tarayıcı (wa.me, her zaman çalışır) ya da WhatsApp Masaüstü uygulaması.
+
+**Neden otomatik gönderilmiyor?** Kullanıcı onayı olmadan otomatik gönderim yalnızca resmî *WhatsApp Business Platform (Cloud API)* ile mümkündür: Meta işletme doğrulaması, onaylı şablonlar ve konuşma başına ücret gerektirir. Resmî olmayan otomasyonlar (tarayıcı botları vb.) WhatsApp şartlarına aykırıdır ve numaranın engellenmesine yol açabilir. Bu yüzden uygulama “hazırla, siz gönderin” yöntemini kullanır; çok kişiye yalnızca iletişimi kabul etmiş kişilere (ör. personel) yazın.
+
+## Güncelleme sistemi
+
+**Kullanıcı tarafı:** Yardım ▸ *Güncellemeleri denetle* (ve açılışta günde bir kez otomatik). Yeni sürüm varsa notlarıyla birlikte sorar; `.exe` sürümünde **Evet** derseniz indirir, doğrular, programı kapatıp yenisiyle açar. Kaynak koddan çalışıyorsanız sürüm sayfasını açar. Veriler `%APPDATA%` altında durduğu için güncellemeden etkilenmez.
+
+**Yayıncı tarafı (sizin yapacağınız):**
+1. `version.py` içindeki `UPDATE_REPO` değerini kendi deponuza ayarlayın (`kullaniciadi/isletme-paneli`, depo **public** olmalı) — bir kez.
+2. Değişikliği yapın, `version.py` içindeki `VERSION`'ı artırın (ör. `1.2.0` → `1.3.0`).
+3. ```
+   git add . && git commit -m "v1.3.0: ..."
+   git tag v1.3.0
+   git push && git push origin v1.3.0
+   ```
+4. GitHub Actions testleri çalıştırıp `.exe` + `.sha256` dosyalarını **Releases** sayfasında yayınlar. Sürüm açıklaması (release notes) kullanıcıya güncelleme penceresinde gösterilir.
+
+Güvenlik notu: indirme yalnızca `https://github.com/` adresinden yapılır ve SHA256 ile doğrulanır. Dosya kod imzalı değildir; GitHub hesabınızı iki adımlı doğrulamayla koruyun.
+
 ## Kullanım ipuçları
 
 - `Ctrl+F` arama kutusuna gider, `Ctrl+N` yeni kayıt, `Esc` aramayı temizler, `Delete` seçili kaydı siler.
@@ -82,6 +110,9 @@ Telefon eşleştirmesi son 10 haneye bakar; `0555 444 55 44`, `+90 555 444 55 44
 
 ```
 app.py              Arayüz (Tkinter)
+whatsapp.py         Numara düzeltme, mesaj şablonu, WhatsApp bağlantısı
+updater.py          GitHub Releases ile güncelleme
+version.py          Sürüm numarası ve güncelleme deposu
 listsync.py         Excel/CSV okuma ve telefonla karşılaştırma
 core.py             Veritabanı, arama, akıllı yanıt, içe/dışa aktarma, Ollama
 tests/test_core.py  Birim testleri   ->  python -m unittest discover -s tests

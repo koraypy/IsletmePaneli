@@ -12,9 +12,11 @@ from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 import core
 import listsync
+import updater
+import whatsapp
+from version import UPDATE_REPO, VERSION
 
 APP_TITLE = "İşletme Paneli"
-VERSION = "1.1.0"
 FAMILY = "Segoe UI"
 
 THEMES = {
@@ -649,6 +651,209 @@ class SyncDialog(tk.Toplevel):
 
 
 # =========================================================================== #
+# WhatsApp mesajı (tek kişi veya listelenen herkes)
+# =========================================================================== #
+class WhatsAppDialog(tk.Toplevel):
+    def __init__(self, app, recs):
+        super().__init__(app)
+        self.app, self.store = app, app.store
+        self.targets = []
+        for rec in recs:
+            opts = whatsapp.phone_options(self.store, rec)
+            if opts:
+                self.targets.append({"rec": rec, "title": self.store.title(rec), "opts": opts,
+                                     "sel": 0, "status": "bekliyor"})
+        skipped = len(recs) - len(self.targets)
+        if not self.targets:
+            messagebox.showinfo(APP_TITLE, "WhatsApp'a uygun cep numarası bulunamadı.\n"
+                                           "(Alan adı “Telefon”, “GSM”, “Cep” gibi olmalı; sabit hatlar atlanır.)",
+                                parent=app)
+            self.destroy()
+            return
+        t = app.t
+        self.title("WhatsApp mesajı")
+        self.geometry("820x700")
+        self.configure(bg=t["bg"])
+        self.transient(app)
+
+        head = f"{len(self.targets)} kişiye mesaj hazırlanacak"
+        if skipped:
+            head += f"   ({skipped} kayıt atlandı: uygun numara yok)"
+        ttk.Label(self, text=head, style="Title.TLabel", padding=(14, 12, 14, 4)).pack(anchor="w")
+
+        tf = ttk.Frame(self, padding=(14, 0))
+        tf.pack(fill="x")
+        self.tree = ttk.Treeview(tf, columns=("k", "n", "d"), show="headings", selectmode="browse",
+                                 height=min(8, max(2, len(self.targets))))
+        for col, txt, w in (("k", "Kişi", 260), ("n", "Numara", 200), ("d", "Durum", 120)):
+            self.tree.heading(col, text=txt)
+            self.tree.column(col, width=w, anchor="w")
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="x", expand=True)
+        vsb.pack(side="right", fill="y")
+        for i, tg in enumerate(self.targets):
+            self.tree.insert("", "end", iid=str(i), values=(tg["title"], tg["opts"][0][0], tg["status"]))
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.on_select())
+
+        row = ttk.Frame(self, padding=(14, 8, 14, 0))
+        row.pack(fill="x")
+        row.columnconfigure(1, weight=1)
+        ttk.Label(row, text="Numara").grid(row=0, column=0, sticky="w")
+        self.num_var = tk.StringVar()
+        self.num_cb = ttk.Combobox(row, textvariable=self.num_var, state="readonly")
+        self.num_cb.grid(row=0, column=1, sticky="ew", padx=8, pady=2)
+        self.num_cb.bind("<<ComboboxSelected>>", lambda e: self.on_number())
+        ttk.Label(row, text="Şablon").grid(row=1, column=0, sticky="w")
+        self.tpl_var = tk.StringVar()
+        self.tpl_cb = ttk.Combobox(row, textvariable=self.tpl_var, state="readonly")
+        self.tpl_cb.grid(row=1, column=1, sticky="ew", padx=8, pady=2)
+        self.tpl_cb.bind("<<ComboboxSelected>>", lambda e: self.pick_template())
+        bb = ttk.Frame(row)
+        bb.grid(row=1, column=2)
+        ttk.Button(bb, text="Kaydet", command=self.save_template).pack(side="left", padx=2)
+        ttk.Button(bb, text="Sil", command=self.del_template).pack(side="left")
+
+        ttk.Label(self, text="Mesaj", style="Muted.TLabel", padding=(14, 8, 14, 2)).pack(anchor="w")
+        self.msg = tk.Text(self, height=6, wrap="word", bg=t["entry"], fg=t["fg"], insertbackground=t["fg"],
+                           relief="flat", highlightthickness=1, highlightbackground=t["border"],
+                           highlightcolor=app.accent, font=(FAMILY, app.font_size))
+        self.msg.pack(fill="x", padx=14)
+        self.msg.bind("<KeyRelease>", lambda e: self.update_preview())
+        ttk.Label(self, style="Muted.TLabel", padding=(14, 2, 14, 6), wraplength=780, justify="left",
+                  text="Kullanılabilir alanlar: {ad}  {tam_ad}  ve kategorinizdeki alan adları, ör. {görev}. "
+                       "Gizli alanlar (TC, IBAN) mesaja konmaz.").pack(anchor="w")
+
+        ttk.Label(self, text="Önizleme (seçili kişi için)", style="Muted.TLabel",
+                  padding=(14, 0, 14, 2)).pack(anchor="w")
+        pf = ttk.Frame(self, style="Card.TFrame", padding=10)
+        pf.pack(fill="x", padx=14)
+        self.preview = ttk.Label(pf, style="Card.TLabel", wraplength=760, justify="left")
+        self.preview.pack(anchor="w")
+
+        ttk.Label(self, style="Muted.TLabel", padding=(14, 8, 14, 0), wraplength=780, justify="left",
+                  text="WhatsApp, mesaj hazır şekilde açılır; “Gönder”e siz basarsınız. Çok kişiye yazarken "
+                       "yalnızca sizinle iletişim kurmayı kabul etmiş kişilere (ör. personel) gönderin; "
+                       "istenmeyen toplu mesajlar numaranızın engellenmesine yol açabilir.").pack(anchor="w")
+        bar = ttk.Frame(self, padding=14)
+        bar.pack(side="bottom", fill="x")
+        ttk.Button(bar, text="Kapat", command=self.destroy).pack(side="right")
+        if len(self.targets) > 1:
+            ttk.Button(bar, text="Sıradakini aç  →", style="Accent.TButton",
+                       command=self.open_next).pack(side="right", padx=8)
+        ttk.Button(bar, text="Seçiliyi WhatsApp'ta aç", style="Accent.TButton" if len(self.targets) == 1
+                   else "TButton", command=self.open_selected).pack(side="right", padx=(0, 8))
+
+        self.templates = self._load_templates()
+        self.refresh_templates()
+        self.tree.selection_set("0")
+        self.on_select()
+
+    # -- şablonlar --------------------------------------------------------- #
+    def _load_templates(self):
+        try:
+            d = json.loads(self.app.cfg("wa_templates", "null"))
+            if isinstance(d, dict) and d:
+                return d
+        except ValueError:
+            pass
+        return dict(whatsapp.DEFAULT_TEMPLATES)
+
+    def refresh_templates(self, pick=None):
+        self.tpl_cb.configure(values=list(self.templates))
+        if pick:
+            self.tpl_var.set(pick)
+            self.msg.delete("1.0", "end")
+            self.msg.insert("1.0", self.templates[pick])
+            self.update_preview()
+
+    def pick_template(self):
+        name = self.tpl_var.get()
+        if name in self.templates:
+            self.refresh_templates(name)
+
+    def save_template(self):
+        text = self.msg.get("1.0", "end-1c").strip()
+        if not text:
+            return
+        name = simpledialog.askstring("Şablonu kaydet", "Şablon adı:", initialvalue=self.tpl_var.get(),
+                                      parent=self)
+        if name and name.strip():
+            self.templates[name.strip()] = text
+            self.app.store.set_setting("wa_templates", json.dumps(self.templates, ensure_ascii=False))
+            self.refresh_templates(name.strip())
+
+    def del_template(self):
+        name = self.tpl_var.get()
+        if name in self.templates and messagebox.askyesno(APP_TITLE, f"“{name}” şablonu silinsin mi?",
+                                                          parent=self):
+            del self.templates[name]
+            self.app.store.set_setting("wa_templates", json.dumps(self.templates, ensure_ascii=False))
+            self.tpl_var.set("")
+            self.refresh_templates()
+
+    # -- seçim / önizleme -------------------------------------------------- #
+    def cur(self):
+        sel = self.tree.selection()
+        return (int(sel[0]), self.targets[int(sel[0])]) if sel else (None, None)
+
+    def on_select(self):
+        i, tg = self.cur()
+        if tg is None:
+            return
+        labels = [o[0] for o in tg["opts"]]
+        self.num_cb.configure(values=labels)
+        self.num_var.set(labels[tg["sel"]])
+        self.update_preview()
+
+    def on_number(self):
+        i, tg = self.cur()
+        if tg is None:
+            return
+        labels = [o[0] for o in tg["opts"]]
+        if self.num_var.get() in labels:
+            tg["sel"] = labels.index(self.num_var.get())
+            self.tree.set(str(i), "n", labels[tg["sel"]])
+
+    def text_for(self, tg):
+        return whatsapp.fill_template(self.msg.get("1.0", "end-1c").strip(), self.store, tg["rec"])
+
+    def update_preview(self):
+        i, tg = self.cur()
+        if tg is None:
+            return
+        text = self.text_for(tg)
+        warn = "\n\n⚠ Tanınmayan {alan} var, olduğu gibi gönderilir." if "{" in text and "}" in text else ""
+        self.preview.config(text=(text or "(mesaj boş)") + warn)
+
+    # -- açma -------------------------------------------------------------- #
+    def open_selected(self):
+        i, tg = self.cur()
+        if tg is None:
+            return
+        text = self.text_for(tg)
+        if not text:
+            messagebox.showwarning(APP_TITLE, "Önce bir mesaj yazın.", parent=self)
+            return
+        number = tg["opts"][tg["sel"]][1]
+        whatsapp.open_chat(number, text, self.app.cfg("wa_mode", "web"))
+        tg["status"] = "açıldı ✓"
+        self.tree.set(str(i), "d", tg["status"])
+
+    def open_next(self):
+        i, _tg = self.cur()
+        order = list(range(i + 1, len(self.targets))) + list(range(0, (i or 0) + 1))
+        nxt = next((j for j in order if self.targets[j]["status"] == "bekliyor"), None)
+        if nxt is None:
+            messagebox.showinfo(APP_TITLE, "Bekleyen kişi kalmadı.", parent=self)
+            return
+        self.tree.selection_set(str(nxt))
+        self.tree.see(str(nxt))
+        self.update_idletasks()
+        self.open_selected()
+
+
+# =========================================================================== #
 # Ayarlar
 # =========================================================================== #
 class SettingsDialog(tk.Toplevel):
@@ -656,7 +861,7 @@ class SettingsDialog(tk.Toplevel):
         super().__init__(app)
         self.app, self.store = app, app.store
         self.title("Ayarlar")
-        self.geometry("520x470")
+        self.geometry("560x760")
         self.configure(bg=app.t["bg"])
         self.transient(app)
         pad = ttk.Frame(self, padding=16)
@@ -702,6 +907,27 @@ class SettingsDialog(tk.Toplevel):
         ttk.Entry(g, textvariable=self.model).grid(row=1, column=1, sticky="ew", padx=8)
         ttk.Button(g, text="Bağlantıyı dene", command=self.test).grid(row=1, column=2)
 
+        ttk.Separator(pad).pack(fill="x", pady=12)
+        ttk.Label(pad, text="WhatsApp", style="Title.TLabel").pack(anchor="w")
+        self.wa_mode = tk.StringVar(value=app.cfg("wa_mode", "web"))
+        ttk.Radiobutton(pad, text="Tarayıcı üzerinden aç (wa.me) — her zaman çalışır", value="web",
+                        variable=self.wa_mode).pack(anchor="w", pady=(4, 0))
+        ttk.Radiobutton(pad, text="WhatsApp Masaüstü uygulamasını doğrudan aç (kuruluysa)", value="app",
+                        variable=self.wa_mode).pack(anchor="w")
+
+        ttk.Separator(pad).pack(fill="x", pady=12)
+        ttk.Label(pad, text="Güncelleme", style="Title.TLabel").pack(anchor="w")
+        g2 = ttk.Frame(pad)
+        g2.pack(fill="x", pady=4)
+        g2.columnconfigure(1, weight=1)
+        self.repo = tk.StringVar(value=app.cfg("update_repo", UPDATE_REPO))
+        ttk.Label(g2, text="GitHub deposu").grid(row=0, column=0, sticky="w")
+        ttk.Entry(g2, textvariable=self.repo).grid(row=0, column=1, sticky="ew", padx=8)
+        ttk.Label(g2, text="kullaniciadi/depoadi", style="Muted.TLabel").grid(row=0, column=2)
+        self.upd_auto = tk.BooleanVar(value=app.cfg("update_auto", "1") == "1")
+        ttk.Checkbutton(pad, text="Açılışta günde bir kez yeni sürümü denetle",
+                        variable=self.upd_auto).pack(anchor="w")
+
         ttk.Label(pad, text=f"Veri klasörü: {os.path.dirname(app.store.path)}", style="Muted.TLabel",
                   wraplength=470).pack(anchor="w", pady=(12, 0))
         bar = ttk.Frame(pad)
@@ -737,6 +963,9 @@ class SettingsDialog(tk.Toplevel):
         s.set_setting("ollama_enabled", "1" if self.ai_on.get() else "0")
         s.set_setting("ollama_host", self.host.get().strip())
         s.set_setting("ollama_model", self.model.get().strip())
+        s.set_setting("wa_mode", self.wa_mode.get())
+        s.set_setting("update_repo", self.repo.get().strip())
+        s.set_setting("update_auto", "1" if self.upd_auto.get() else "0")
         self.app.apply_theme()
         self.app.refresh_categories()
         self.app.refresh()
@@ -780,6 +1009,9 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self._last_watch = 0.0
         self.after(3000, self.watch_tick)
+        self.after(8000, self._auto_update)
+        self._upd_result = None
+        self._inst_result = None
 
     # -- ayar yardımcıları -------------------------------------------------- #
     def cfg(self, key, default=None):
@@ -810,6 +1042,7 @@ class App(tk.Tk):
         d.add_command(label="Ayarlar…", command=lambda: SettingsDialog(self))
         h = tk.Menu(m, tearoff=0)
         m.add_cascade(label="Yardım", menu=h)
+        h.add_command(label="Güncellemeleri denetle…", command=lambda: self.check_updates(True))
         h.add_command(label="Hakkında", command=self.about)
 
         self.top = ttk.Frame(self, padding=(14, 12, 14, 2))
@@ -818,6 +1051,7 @@ class App(tk.Tk):
         self.search = ttk.Entry(self.top, textvariable=self.search_var, style="Search.TEntry")
         self.search.pack(side="left", fill="x", expand=True)
         ttk.Button(self.top, text="✨ Sor", command=self.ask_current).pack(side="left", padx=(8, 0))
+        ttk.Button(self.top, text="💬 Toplu mesaj", command=self.bulk_whatsapp).pack(side="left", padx=(8, 0))
         ttk.Button(self.top, text="＋ Yeni kayıt", style="Accent.TButton",
                    command=self.new_record).pack(side="left", padx=(8, 0))
         ttk.Label(self, style="Muted.TLabel", padding=(16, 0, 14, 6),
@@ -1046,6 +1280,9 @@ class App(tk.Tk):
         ttk.Label(head, text=f"   {rec['category']}", style="CardMuted.TLabel").pack(side="left")
         ttk.Button(head, text="Sil", command=self.delete_selected).pack(side="right")
         ttk.Button(head, text="Düzenle", command=self.edit_selected).pack(side="right", padx=6)
+        if whatsapp.phone_options(self.store, rec):
+            ttk.Button(head, text="💬 WhatsApp", style="Accent.TButton",
+                       command=self.whatsapp_selected).pack(side="right")
         r = 1
         for f in flds:
             v = str(rec["data"].get(str(f["id"]), ""))
@@ -1159,6 +1396,101 @@ class App(tk.Tk):
             self.show_answer(base + "\n\n" + ans)
         else:
             self.after(300, self._poll_ai)
+
+    # -- WhatsApp ----------------------------------------------------------- #
+    def whatsapp_selected(self):
+        if self.selected:
+            WhatsAppDialog(self, [self.selected])
+
+    def bulk_whatsapp(self):
+        recs = [self.rec_by_iid[i] for i in self.tree.get_children() if i in self.rec_by_iid]
+        if not recs:
+            messagebox.showinfo(APP_TITLE, "Listede kayıt yok. Önce arama yapın veya bir kategori seçin.",
+                                parent=self)
+            return
+        WhatsAppDialog(self, recs)
+
+    # -- güncelleme --------------------------------------------------------- #
+    def _auto_update(self):
+        today = datetime.date.today().isoformat()
+        repo = (self.cfg("update_repo", UPDATE_REPO) or "").strip()
+        if self.cfg("update_auto", "1") == "1" and updater.valid_repo(repo) \
+                and self.cfg("update_last") != today:
+            self.store.set_setting("update_last", today)
+            self.check_updates(False)
+
+    def check_updates(self, manual=True):
+        repo = (self.cfg("update_repo", UPDATE_REPO) or "").strip()
+        if not updater.valid_repo(repo):
+            if manual:
+                messagebox.showinfo(APP_TITLE, "Güncelleme için GitHub deposu girilmemiş.\n"
+                                               "Düzen ▸ Ayarlar ▸ Güncelleme bölümüne “kullaniciadi/depoadi” yazın.",
+                                    parent=self)
+            return
+        if manual:
+            self.status.config(text="Güncellemeler denetleniyor…")
+        self._upd_result = None
+
+        def worker():
+            try:
+                self._upd_result = ("ok", updater.fetch_latest(repo))
+            except Exception as e:
+                self._upd_result = ("err", e)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(400, lambda: self._poll_update(manual))
+
+    def _poll_update(self, manual):
+        r = self._upd_result
+        if r is None:
+            self.after(400, lambda: self._poll_update(manual))
+            return
+        self._upd_result = None
+        kind, data = r
+        if kind == "err":
+            if manual:
+                messagebox.showwarning(APP_TITLE, "Güncelleme denetlenemedi (internet var mı, depo herkese açık mı?)"
+                                                  f"\n\n{data}", parent=self)
+            return
+        if not updater.is_newer(data["version"], VERSION):
+            if manual:
+                self.status.config(text="Uygulama güncel.")
+                messagebox.showinfo(APP_TITLE, f"Güncelsiniz (sürüm {VERSION}).", parent=self)
+            return
+        notes = (data["notes"] or "").strip()[:700]
+        head = f"Yeni sürüm var: {data['version']}   (sizde {VERSION})\n\n{notes}\n\n"
+        if getattr(sys, "frozen", False) and data.get("exe_url"):
+            if messagebox.askyesno(APP_TITLE, head + "Şimdi indirilip kurulsun mu?\n"
+                                                     "Program kapanıp yeniden açılır. Verileriniz korunur.",
+                                   parent=self):
+                self.do_install(data)
+        elif messagebox.askyesno(APP_TITLE, head + "Sürüm sayfası açılsın mı?", parent=self):
+            webbrowser.open(data["page"])
+
+    def do_install(self, info):
+        self.status.config(text="Güncelleme indiriliyor, lütfen bekleyin…")
+        self._inst_result = None
+
+        def worker():
+            try:
+                updater.install_update(info)
+                self._inst_result = ("ok", None)
+            except Exception as e:
+                self._inst_result = ("err", e)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(500, self._poll_install)
+
+    def _poll_install(self):
+        r = self._inst_result
+        if r is None:
+            self.after(500, self._poll_install)
+            return
+        if r[0] == "ok":
+            self.on_close()
+        else:
+            self.status.config(text="Güncelleme başarısız.")
+            messagebox.showerror(APP_TITLE, f"Güncelleme kurulamadı:\n{r[1]}", parent=self)
 
     # -- liste izleme ("bot") ----------------------------------------------- #
     def watch_tick(self):
