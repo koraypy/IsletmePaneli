@@ -22,12 +22,19 @@ jobs:
         run: |
           python -m pip install pyinstaller
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name IsletmePaneli app.py
+      - name: SHA256 doğrulama dosyası üret
+        shell: pwsh
+        run: (Get-FileHash dist/IsletmePaneli.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline dist/IsletmePaneli.exe.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: IsletmePaneli-windows
-          path: dist/IsletmePaneli.exe
+          path: |
+            dist/IsletmePaneli.exe
+            dist/IsletmePaneli.exe.sha256
       - name: Release'e ekle (etiket varsa)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/IsletmePaneli.exe
+          files: |
+            dist/IsletmePaneli.exe
+            dist/IsletmePaneli.exe.sha256
