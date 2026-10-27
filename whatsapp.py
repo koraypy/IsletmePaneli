@@ -17,6 +17,7 @@ DEFAULT_TEMPLATES = {
     "Merhaba": "Merhaba {ad}, nasılsınız?",
     "Toplantı hatırlatma": "Merhaba {ad}, yarınki toplantıyı hatırlatmak istedim. Katılımınızı teyit eder misiniz?",
     "Duyuru": "Sayın {tam_ad}, önemli bir duyurumuz var: ",
+    "Bilgi formu": "Merhaba {ad}, bilgilerini şu formdan doldurur musun? {form_linki}  Davet kodu: {davet_kodu}",
 }
 
 
@@ -71,6 +72,10 @@ def fill_template(text, store, rec):
     title = store.title(rec, flds)
     parts = title.split()
     tokens = {"tam_ad": title, "ad": parts[0] if parts else title}
+    for key, setting in (("form_linki", "web_url"), ("davet_kodu", "web_code")):
+        val = (store.get_setting(setting, "") or "").strip()
+        if val:
+            tokens[key] = val
     for f in flds:
         if f["sensitive"]:
             continue

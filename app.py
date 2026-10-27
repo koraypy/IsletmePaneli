@@ -13,6 +13,7 @@ from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 import core
 import listsync
 import updater
+import webinbox
 import whatsapp
 from version import UPDATE_REPO, VERSION
 
@@ -854,6 +855,178 @@ class WhatsAppDialog(tk.Toplevel):
 
 
 # =========================================================================== #
+# Web başvuruları (personelin web formundan gönderdiği bilgiler)
+# =========================================================================== #
+class WebInboxDialog(tk.Toplevel):
+    STATUS = {"new": "Yeni", "changed": "Bilgisi farklı", "same": "Zaten kayıtlı",
+              "nokey": "Telefon geçersiz", "dup": "Tekrar başvuru"}
+    ACTION = {"new": "eklenecek", "changed": "güncellenecek", "same": "sunucudan silinecek"}
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app, self.store = app, app.store
+        self.base, self.key = app.cfg("web_url", ""), app.cfg("web_key", "")
+        if not self.base or not self.key:
+            messagebox.showinfo(APP_TITLE, "Önce Düzen ▸ Ayarlar ▸ Web formu bölümüne site adresini ve "
+                                           "API anahtarını girin.", parent=app)
+            self.destroy()
+            return
+        self.cats = self.store.categories()
+        if not self.cats:
+            self.destroy()
+            return
+        self.title("Web başvuruları")
+        self.geometry("900x640")
+        self.configure(bg=app.t["bg"])
+        self.transient(app)
+        self.items = []
+
+        top = ttk.Frame(self, padding=(14, 12, 14, 4))
+        top.pack(fill="x")
+        top.columnconfigure(1, weight=1)
+        ttk.Label(top, text="Kategori").grid(row=0, column=0, sticky="w")
+        pref = app.cfg("web_cat", "")
+        names = [c["name"] for c in self.cats]
+        self.cat_var = tk.StringVar(value=next((n for n in names if n == pref), None) or
+                                    next((n for n in names if core.norm(n) == "personel"), names[0]))
+        cb = ttk.Combobox(top, textvariable=self.cat_var, state="readonly", values=names)
+        cb.grid(row=0, column=1, sticky="ew", padx=8)
+        cb.bind("<<ComboboxSelected>>", lambda e: self.refresh())
+        ttk.Button(top, text="Yenile", style="Accent.TButton", command=self.refresh).grid(row=0, column=2)
+        self.info = ttk.Label(self, style="Muted.TLabel", padding=(14, 0), wraplength=860, justify="left")
+        self.info.pack(anchor="w")
+
+        tf = ttk.Frame(self, padding=(14, 6))
+        tf.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(tf, columns=("s", "k", "t", "d"), show="headings", selectmode="extended")
+        for col, txt, w in (("s", "Durum", 130), ("k", "Kişi", 200), ("t", "Telefon", 140), ("d", "Gelen bilgiler", 380)):
+            self.tree.heading(col, text=txt)
+            self.tree.column(col, width=w, anchor="w")
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        self.tree.bind("<Control-a>", lambda e: (self.tree.selection_set(self.tree.get_children()), "break")[1])
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self.show_detail())
+
+        cardf = ttk.Frame(self, style="Card.TFrame", padding=10)
+        cardf.pack(fill="x", padx=14)
+        self.detail = ttk.Label(cardf, style="Card.TLabel", wraplength=840, justify="left",
+                                text="Ayrıntı için bir başvuru seçin.")
+        self.detail.pack(anchor="w")
+
+        bar = ttk.Frame(self, padding=14)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="Kapat", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="Seçilileri sil (reddet)", command=self.reject).pack(side="right", padx=8)
+        ttk.Button(bar, text="Tümünü işle", command=lambda: self.process(True)).pack(side="right")
+        ttk.Button(bar, text="Seçilileri işle", style="Accent.TButton",
+                   command=lambda: self.process(False)).pack(side="right", padx=8)
+        self.after(100, self.refresh)
+
+    def cid(self):
+        return next(c["id"] for c in self.cats if c["name"] == self.cat_var.get())
+
+    def refresh(self):
+        self.store.set_setting("web_cat", self.cat_var.get())
+        self.config(cursor="watch")
+        self.update_idletasks()
+        try:
+            raw = webinbox.list_items(self.base, self.key)
+        except Exception as e:
+            self.config(cursor="")
+            self.info.config(text=f"Başvurular alınamadı: {e}")
+            return
+        self.config(cursor="")
+        headers, rows = webinbox.to_rows(raw)
+        cid = self.cid()
+        flds = self.store.fields(cid)
+        mapping, unmapped = {}, []
+        for h in headers:
+            f = next((f for f in flds if core.norm(f["name"]) == core.norm(h) and f["id"] not in mapping), None)
+            if f:
+                mapping[f["id"]] = h
+            else:
+                unmapped.append(h)
+        key_f = next((f for f in flds if "telefon" in core.norm(f["name"])), None)
+        self.items = []
+        self.tree.delete(*self.tree.get_children())
+        msg = f"{len(rows)} başvuru bekliyor."
+        if unmapped:
+            msg += f"  ⚠ Kategoride karşılığı olmayan form alanları (aktarılmaz): {', '.join(unmapped)}"
+        if rows and (key_f is None or key_f["id"] not in mapping):
+            self.info.config(text="Bu kategoride “Telefon” alanı ya da formda telefon alanı yok; eşleştirme yapılamıyor.")
+            return
+        if rows:
+            res = listsync.compare(self.store, cid, rows, mapping, key_f["id"])
+            order = {r["_id"]: n for n, r in enumerate(rows)}
+            for kind in ("new", "changed", "same", "nokey", "dup"):
+                for it in res[kind]:
+                    it["kind"] = kind
+                    self.items.append(it)
+            self.items.sort(key=lambda it: order[it["row"]["_id"]])
+        fn = {f["id"]: f["name"] for f in flds}
+        for idx, it in enumerate(self.items):
+            detail = "; ".join(f"{fn[int(k)]}: {v}" for k, v in it["data"].items()
+                               if int(k) != (key_f["id"] if key_f else -1) and int(k) in fn)
+            self.tree.insert("", "end", iid=str(idx),
+                             values=(self.STATUS[it["kind"]], it["title"], it["phone"], detail))
+        self.info.config(text=msg)
+        self.detail.config(text="Ayrıntı için bir başvuru seçin.")
+
+    def show_detail(self):
+        sel = self.tree.selection()
+        if len(sel) != 1:
+            return
+        it = self.items[int(sel[0])]
+        lines = [f"{k}: {v}" for k, v in it["row"].items() if not k.startswith("_")]
+        lines.append(f"Geldiği zaman (UTC): {it['row'].get('_received', '')}")
+        if it["kind"] == "changed":
+            lines.append("Panelde farklı olanlar: " + "; ".join(
+                f"{n}: {o or '(boş)'} → {nw}" for _f, n, o, nw in it["diffs"]))
+        self.detail.config(text="\n".join(lines))
+
+    def _chosen(self, everything):
+        ids = self.tree.get_children() if everything else self.tree.selection()
+        return [self.items[int(i)] for i in ids]
+
+    def _ack(self, its):
+        try:
+            webinbox.ack(self.base, self.key, [it["row"]["_id"] for it in its])
+            return True
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, "Kayıtlar işlendi ama sunucudan silinemedi (tekrar yenileyin):\n"
+                                            f"{e}", parent=self)
+            return False
+
+    def process(self, everything):
+        its = [i for i in self._chosen(everything) if i["kind"] in ("new", "changed", "same")]
+        if not its:
+            messagebox.showinfo(APP_TITLE, "İşlenecek başvuru seçilmedi.\n(Telefonu geçersiz ya da tekrar eden "
+                                           "başvurular otomatik işlenmez; bakıp silebilirsiniz.)", parent=self)
+            return
+        n = {k: sum(1 for i in its if i["kind"] == k) for k in ("new", "changed", "same")}
+        if not messagebox.askyesno(APP_TITLE, f"{n['new']} kişi eklenecek, {n['changed']} kişinin bilgisi "
+                                              f"güncellenecek, {n['same']} başvuru zaten kayıtlı olduğundan "
+                                              "sunucudan silinecek.\n\nDevam edilsin mi?", parent=self):
+            return
+        cid = self.cid()
+        listsync.add_new(self.store, cid, [i for i in its if i["kind"] == "new"])
+        listsync.apply_changes(self.store, [i for i in its if i["kind"] == "changed"])
+        self._ack(its)
+        self.app.refresh_categories()
+        self.app.refresh()
+        self.refresh()
+
+    def reject(self):
+        its = self._chosen(False)
+        if its and messagebox.askyesno(APP_TITLE, f"{len(its)} başvuru panele EKLENMEDEN sunucudan "
+                                                  "kalıcı olarak silinsin mi?", icon="warning", parent=self):
+            self._ack(its)
+            self.refresh()
+
+
+# =========================================================================== #
 # Ayarlar
 # =========================================================================== #
 class SettingsDialog(tk.Toplevel):
@@ -861,10 +1034,15 @@ class SettingsDialog(tk.Toplevel):
         super().__init__(app)
         self.app, self.store = app, app.store
         self.title("Ayarlar")
-        self.geometry("560x760")
+        self.geometry("580x720")
         self.configure(bg=app.t["bg"])
         self.transient(app)
-        pad = ttk.Frame(self, padding=16)
+        bar = ttk.Frame(self, padding=(16, 8))
+        bar.pack(side="bottom", fill="x")
+        sf = ScrollFrame(self)
+        sf.pack(fill="both", expand=True)
+        sf.canvas.configure(bg=app.t["bg"])
+        pad = ttk.Frame(sf.inner, padding=16)
         pad.pack(fill="both", expand=True)
 
         ttk.Label(pad, text="Görünüm", style="Title.TLabel").pack(anchor="w")
@@ -916,6 +1094,31 @@ class SettingsDialog(tk.Toplevel):
                         variable=self.wa_mode).pack(anchor="w")
 
         ttk.Separator(pad).pack(fill="x", pady=12)
+        ttk.Label(pad, text="Web formu (personel kendi bilgisini girsin)", style="Title.TLabel").pack(anchor="w")
+        g3 = ttk.Frame(pad)
+        g3.pack(fill="x", pady=4)
+        g3.columnconfigure(1, weight=1)
+        self.web_url = tk.StringVar(value=app.cfg("web_url", ""))
+        self.web_key = tk.StringVar(value=app.cfg("web_key", ""))
+        self.web_code = tk.StringVar(value=app.cfg("web_code", ""))
+        ttk.Label(g3, text="Site adresi").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Entry(g3, textvariable=self.web_url).grid(row=0, column=1, sticky="ew", padx=8)
+        ttk.Label(g3, text="API anahtarı").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Entry(g3, textvariable=self.web_key, show="•").grid(row=1, column=1, sticky="ew", padx=8)
+        ttk.Label(g3, text="Davet kodu").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Entry(g3, textvariable=self.web_code).grid(row=2, column=1, sticky="ew", padx=8)
+        wb = ttk.Frame(pad)
+        wb.pack(anchor="w", pady=4)
+        ttk.Button(wb, text="Anahtar üret", command=self.gen_keys).pack(side="left")
+        ttk.Button(wb, text="Bağlantıyı dene", command=self.test_web).pack(side="left", padx=6)
+        self.web_auto = tk.BooleanVar(value=app.cfg("web_auto", "1") == "1")
+        ttk.Checkbutton(pad, text="Yeni başvuru var mı diye her 15 dakikada bir bak",
+                        variable=self.web_auto).pack(anchor="w")
+        ttk.Label(pad, text="Kurulum: web klasörünü hosta yükleyin, “Anahtar üret”in verdiği iki satırı "
+                            "web/config.php'ye yapıştırın. Ayrıntı: web/KURULUM.md", style="Muted.TLabel",
+                  wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
+
+        ttk.Separator(pad).pack(fill="x", pady=12)
         ttk.Label(pad, text="Güncelleme", style="Title.TLabel").pack(anchor="w")
         g2 = ttk.Frame(pad)
         g2.pack(fill="x", pady=4)
@@ -930,10 +1133,27 @@ class SettingsDialog(tk.Toplevel):
 
         ttk.Label(pad, text=f"Veri klasörü: {os.path.dirname(app.store.path)}", style="Muted.TLabel",
                   wraplength=470).pack(anchor="w", pady=(12, 0))
-        bar = ttk.Frame(pad)
-        bar.pack(side="bottom", fill="x", pady=(12, 0))
         ttk.Button(bar, text="İptal", command=self.destroy).pack(side="right")
         ttk.Button(bar, text="Kaydet", style="Accent.TButton", command=self.save).pack(side="right", padx=8)
+
+    def gen_keys(self):
+        code, key = webinbox.new_keys()
+        self.web_code.set(code)
+        self.web_key.set(key)
+        self.clipboard_clear()
+        self.clipboard_append(webinbox.config_lines(code, key))
+        messagebox.showinfo(APP_TITLE, "Yeni davet kodu ve anahtar üretildi; şu iki satır panoya kopyalandı:\n\n"
+                                       + webinbox.config_lines(code, key) + "\nweb/config.php içinde aynı satırların "
+                                       "yerine yapıştırın, sonra Kaydet'e basın.", parent=self)
+
+    def test_web(self):
+        try:
+            r = webinbox.ping(self.web_url.get(), self.web_key.get().strip())
+        except Exception as e:
+            messagebox.showwarning("Web formu", f"Bağlanılamadı:\n{e}", parent=self)
+            return
+        messagebox.showinfo("Web formu", f"Bağlandı. Bekleyen başvuru: {r.get('pending', 0)}\n"
+                                         f"Form alanları: {', '.join(r.get('fields', []))}", parent=self)
 
     def pick(self):
         c = colorchooser.askcolor(color=self.accent, parent=self)[1]
@@ -964,6 +1184,10 @@ class SettingsDialog(tk.Toplevel):
         s.set_setting("ollama_host", self.host.get().strip())
         s.set_setting("ollama_model", self.model.get().strip())
         s.set_setting("wa_mode", self.wa_mode.get())
+        s.set_setting("web_url", webinbox.base_url(self.web_url.get()))
+        s.set_setting("web_key", self.web_key.get().strip())
+        s.set_setting("web_code", self.web_code.get().strip())
+        s.set_setting("web_auto", "1" if self.web_auto.get() else "0")
         s.set_setting("update_repo", self.repo.get().strip())
         s.set_setting("update_auto", "1" if self.upd_auto.get() else "0")
         self.app.apply_theme()
@@ -1008,6 +1232,9 @@ class App(tk.Tk):
         self.search.focus_set()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self._last_watch = 0.0
+        self._last_web = 0.0
+        self._web_pending = None
+        self._web_notified = 0
         self.after(3000, self.watch_tick)
         self.after(8000, self._auto_update)
         self._upd_result = None
@@ -1025,6 +1252,7 @@ class App(tk.Tk):
         m.add_cascade(label="Dosya", menu=f)
         f.add_command(label="Yeni kayıt\tCtrl+N", command=self.new_record)
         f.add_command(label="Dosyadan karşılaştır (Excel, CSV)…", command=lambda: SyncDialog(self))
+        f.add_command(label="Web başvuruları…", command=lambda: WebInboxDialog(self))
         f.add_separator()
         f.add_command(label="Yedek al…", command=self.do_backup)
         f.add_command(label="Dışa aktar (JSON)…", command=self.export_json)
@@ -1493,7 +1721,32 @@ class App(tk.Tk):
             messagebox.showerror(APP_TITLE, f"Güncelleme kurulamadı:\n{r[1]}", parent=self)
 
     # -- liste izleme ("bot") ----------------------------------------------- #
+    def web_check_start(self):
+        base, key = self.cfg("web_url"), self.cfg("web_key")
+
+        def worker():
+            try:
+                self._web_pending = webinbox.ping(base, key).get("pending", 0)
+            except Exception:
+                self._web_pending = None
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def watch_tick(self):
+        try:
+            n = self._web_pending
+            self._web_pending = None
+            if n is not None and n > 0 and n != self._web_notified:
+                self._web_notified = n
+                self.show_answer(f"🔔 {n} yeni web başvurusu bekliyor — Dosya ▸ Web başvuruları'ndan işleyin.")
+            elif n == 0:
+                self._web_notified = 0
+            if (self.cfg("web_url") and self.cfg("web_key") and self.cfg("web_auto", "1") == "1"
+                    and time.time() - self._last_web >= 15 * 60):
+                self._last_web = time.time()
+                self.web_check_start()
+        except Exception:
+            pass
         try:
             mins = max(1, int(self.cfg("watch_minutes", "30") or 30))
             if self.cfg("watch_path") and time.time() - self._last_watch >= mins * 60:

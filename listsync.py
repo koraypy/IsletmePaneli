@@ -129,11 +129,19 @@ def file_sig(path):
     return f"{os.path.getmtime(path)}:{os.path.getsize(path)}"
 
 
+def csv_safe(v):
+    """Excel'de formül olarak çalışabilecek hücreleri (=, @, +komut) etkisizleştirir."""
+    v = "" if v is None else str(v)
+    if v[:1] in ("=", "@") or (v[:1] in ("+", "-") and not re.fullmatch(r"[+\-]?[\d\s()./-]+", v)):
+        return "'" + v
+    return v
+
+
 def write_csv(path, header, rows):
     with open(path, "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh, delimiter=";")
-        w.writerow(header)
-        w.writerows(rows)
+        w.writerow([csv_safe(h) for h in header])
+        w.writerows([[csv_safe(c) for c in r] for r in rows])
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +202,7 @@ def compare(store, cid, rows, mapping, key_fid):
         if not data:
             continue
         keys = phone_keys(data.get(str(key_fid), ""))
-        item = {"data": data, "title": title_of(store, cid, data),
+        item = {"data": data, "row": row, "title": title_of(store, cid, data),
                 "phone": data.get(str(key_fid), "")}
         if not keys:
             res["nokey"].append(item)

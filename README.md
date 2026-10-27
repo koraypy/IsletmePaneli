@@ -20,6 +20,7 @@
 | 📋 **Kopyala** | Her alanın yanında tek tıkla panoya kopyalama. |
 | 💬 **WhatsApp mesajı** | Kayıtlı numaradan tek tıkla WhatsApp'ı hazır mesajla açar; tek kişiye ya da listelenen herkese sırayla. Şablonlar ve `{ad}` gibi kişiye özel alanlar. |
 | 🔄 **Güncelleme** | GitHub'daki yeni sürümü denetler; `.exe` sürümünde tek tıkla indirip kurar (SHA256 doğrulamalı). Verileriniz korunur. |
+| 🌐 **Web formu (PHP)** | Personel telefonundan bir bağlantıyla kendi bilgisini girer; panel başvuruları çeker, “yeni / zaten kayıtlı / bilgisi farklı” diye ayırır, onayınızla ekler ve sunucudan siler. Ücretsiz hostta çalışır. Kurulum: [`web/KURULUM.md`](web/KURULUM.md). |
 | 📥 **Excel/CSV karşılaştırma + izleme** | Elinizdeki listeyi panelle karşılaştırır: kim **yeni**, kimin bilgisi **değişmiş**, kim **listede yok**. Dosyayı izleyip değişince haber verir. |
 
 Uygulama ilk açıldığında **Personel / Müşteri / Tedarikçi** kategorileri ve örnek bir personel kaydı (*Ahmet Yalın*) ile gelir. Örneği silmek için kaydı seçip **Sil**'e basmanız yeterli.
@@ -59,6 +60,11 @@ Düzen ▸ **Dosyadan karşılaştır / içe aktar**:
 Telefon eşleştirmesi son 10 haneye bakar; `0555 444 55 44`, `+90 555 444 55 44` ve Excel'in baştaki 0'ı attığı `5554445544` aynı numara sayılır. Bir hücrede birden fazla numara varsa (`0555… / 0532…`) hepsi denenir. Telefonu olmayan satırlar ve dosyada tekrar eden numaralar **Sorunlu** sekmesinde ayrıca gösterilir.
 
 **İzleme (bot):** “Bu dosyayı izle” kutusunu işaretleyip Karşılaştır'a basarsanız panel, belirlediğiniz aralıkta (varsayılan 30 dk) dosyanın değişip değişmediğine bakar. Değişmişse ve yeni/değişen kişi varsa “3 yeni kişi var” diye sorar, onaylarsanız karşılaştırma ekranı hazır gelir. Panel kapalıyken kontrol yapılmaz; açıldığında ilk iş kontrol eder. Dosya Excel'de açıksa okunamayabilir, sonraki turda yeniden denenir.
+
+## Web formu ile personel bilgisi toplama
+
+`web/` klasörü, ücretsiz PHP hostuna yükleyeceğiniz küçük bir sitedir (form + panel için API). Adım adım kurulum, güvenlik önlemleri ve KVKK notları: **[web/KURULUM.md](web/KURULUM.md)**.
+Panel tarafı: Ayarlar ▸ *Web formu* (adres, anahtar, davet kodu) ve Dosya ▸ **Web başvuruları**. TC kimlik no gibi hassas veriyi web formundan toplamamanızı öneririz.
 
 ## WhatsApp'tan mesaj gönderme
 
@@ -110,6 +116,8 @@ Güvenlik notu: indirme yalnızca `https://github.com/` adresinden yapılır ve 
 
 ```
 app.py              Arayüz (Tkinter)
+webinbox.py         Web formu başvurularını çeken istemci
+web/                PHP sitesi (form, api.php, KURULUM.md)
 whatsapp.py         Numara düzeltme, mesaj şablonu, WhatsApp bağlantısı
 updater.py          GitHub Releases ile güncelleme
 version.py          Sürüm numarası ve güncelleme deposu

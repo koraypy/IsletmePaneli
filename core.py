@@ -151,6 +151,14 @@ EXAMPLE_PERSON = {"Ad Soyad": "Ahmet Yalın", "Telefon": "0555 444 55 44",
                   "TC Kimlik No": "12345678901"}
 
 
+def csv_safe(v):
+    """Excel'de formül olarak çalışabilecek hücreleri etkisizleştirir."""
+    v = "" if v is None else str(v)
+    if v[:1] in ("=", "@") or (v[:1] in ("+", "-") and not re.fullmatch(r"[+\-]?[\d\s()./-]+", v)):
+        return "'" + v
+    return v
+
+
 def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
@@ -536,16 +544,16 @@ class Store:
             w = csv.writer(fh, delimiter=";")
             if cid:
                 flds = self.fields(cid)
-                w.writerow([f["name"] for f in flds])
+                w.writerow([csv_safe(f["name"]) for f in flds])
                 for r in self.all_records(cid):
-                    w.writerow([r["data"].get(str(f["id"]), "") for f in flds])
+                    w.writerow([csv_safe(r["data"].get(str(f["id"]), "")) for f in flds])
             else:
                 w.writerow(["Kategori", "Kayıt No", "Alan", "Değer"])
                 for r in self.all_records():
                     for f in self.fields(r["category_id"]):
                         v = r["data"].get(str(f["id"]), "")
                         if str(v).strip():
-                            w.writerow([r["category"], r["id"], f["name"], v])
+                            w.writerow([csv_safe(r["category"]), r["id"], csv_safe(f["name"]), csv_safe(v)])
 
 
 # --------------------------------------------------------------------------- #
